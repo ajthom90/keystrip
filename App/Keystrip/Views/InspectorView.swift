@@ -254,14 +254,9 @@ private struct PhoneIDEditor: View {
         }
         .onChange(of: phoneID) { _, newID in
             guard newID != sourceID else { return }
-            let pending = draft
-            let previous = sourceID
             sourceID = newID
             draft = newID
             errorMessage = nil
-            let trimmed = pending.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard trimmed != previous else { return }
-            _ = try? document.renamePhone(id: previous, to: pending, undoManager: undoManager)
         }
     }
 
