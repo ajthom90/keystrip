@@ -75,11 +75,17 @@ with `content` as RTF (section 2.4). A missing row is a blank label.
 | `5096 + 1000 × (k − 1)` | Key k, 1-based, top to bottom down the strip. 12 keys for AWX9212 (5096…16096), 24 for AWX9224 (5096…28096). |
 | 1…1024 | Reserved by DESI (comment fields). Keystrip preserves them and never creates them. |
 
-Physical layout (confirmed from the DESI label photo and the Allworx Word
-templates): the paper strip is one narrow vertical column. Each row is a
-rounded "finger" cell whose open end alternates sides, odd rows opening to the
-right and even rows to the left, because the phone's keys are staggered on
-both sides of the strip. The name strip sits above row 1.
+Physical layout (confirmed from DESI's product photos and the Allworx Word
+templates). Both strips are one narrow vertical column with the name strip
+above row 1, but the rows differ by model:
+
+- AWX9224: each row is a rounded "finger" cell whose open end alternates
+  sides, odd rows opening to the right and even rows to the left, because the
+  phone's keys are staggered on both sides of the strip.
+- AWX9212: plain rectangular rows separated by straight rules, with angled
+  grey clip tabs at the very top and bottom of the strip. All twelve keys are
+  on the same side (drawn on the right).
+- Unknown models are drawn like the 9212.
 
 `selections` holds the id of the phone currently selected in the DESI UI. One
 row in practice. Keystrip rewrites it to the phone selected in Keystrip when
@@ -468,10 +474,11 @@ from the file's UTF-16le encoding.
   highest key field present. A footnote lists how many other fields (comment
   fields, keys beyond the current model) are preserved but not shown.
 - `StripView` draws the strip to proportion: a fixed strip width, equal row
-  heights, the name strip as a full-width rounded cell on top, then one
-  `KeyCellView` per key. Each key cell is a rounded "finger" shape whose open
-  end alternates right (odd keys) and left (even keys), with a small key-cap
-  marker beside the open end, exactly like the DESI label. The strip has a
+  heights, the name strip as a full-width cell on top, then one `KeyCellView`
+  per key, in the model's style from section 2.3: staggered finger cells for
+  the 9224 (key-cap markers beside the rounded ends, alternating sides) and
+  straight rectangular rows with top and bottom clip tabs for the 9212 and
+  unknown models (markers all on the right). The strip has a
   paper-white background with a soft shadow, and works in light and dark mode.
 - `KeyCellView` contains a `TextField` with `axis: .vertical` bound to the
   label's plain text, using the label's alignment, font size (half-points
