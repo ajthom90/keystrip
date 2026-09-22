@@ -32,16 +32,9 @@ struct StripView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            switch stripStyle {
-            case .fingers:
-                markerColumn(.odd)
-                paper
-                markerColumn(.even)
-            case .ruled:
-                Color.clear.frame(width: markerWidth)
-                paper
-                markerColumn(.all)
-            }
+            markerColumn(stripStyle == .fingers ? .odd : .none)
+            paper
+            markerColumn(stripStyle == .fingers ? .even : .all)
         }
         .accessibilityElement(children: .contain)
     }
@@ -130,13 +123,14 @@ struct StripView: View {
     }
 
     private enum MarkerFilter {
-        case odd, even, all
+        case odd, even, all, none
 
         func includes(_ number: Int) -> Bool {
             switch self {
             case .odd: !number.isMultiple(of: 2)
             case .even: number.isMultiple(of: 2)
             case .all: true
+            case .none: false
             }
         }
     }
@@ -152,7 +146,7 @@ struct StripView: View {
                     .padding(.bottom, nameExtraGap)
                 ForEach(keyNumbers, id: \.self) { number in
                     if stripStyle == .ruled {
-                        Color.clear.frame(height: ruleHeight)
+                        Color.clear.frame(width: markerWidth, height: ruleHeight)
                     }
                     Group {
                         if filter.includes(number) {
@@ -169,6 +163,7 @@ struct StripView: View {
                 Color.clear.frame(width: markerWidth, height: clipTabHeight)
             }
         }
+        .frame(width: markerWidth)
         .accessibilityHidden(true)
     }
 
