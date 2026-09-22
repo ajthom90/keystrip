@@ -29,6 +29,8 @@ targets:
       path: App/Keystrip/Info.plist
       properties:
         CFBundleDisplayName: Keystrip
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         LSApplicationCategoryType: public.app-category.productivity
         UISupportsDocumentBrowser: true
         LSSupportsOpeningDocumentsInPlace: true
