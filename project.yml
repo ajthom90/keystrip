@@ -1,0 +1,52 @@
+name: Keystrip
+options:
+  bundleIdPrefix: io.github.ajthom90
+  deploymentTarget:
+    macOS: "15.0"
+    iOS: "18.0"
+  createIntermediateGroups: true
+packages:
+  KeystripCore:
+    path: KeystripCore
+configFiles:
+  Debug: Config/Signing.xcconfig
+  Release: Config/Signing.xcconfig
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  Keystrip:
+    type: application
+    platform: auto
+    supportedDestinations: [iOS, macOS]
+    sources:
+      - path: App/Keystrip
+    dependencies:
+      - package: KeystripCore
+    info:
+      path: App/Keystrip/Info.plist
+      properties:
+        CFBundleDisplayName: Keystrip
+        LSApplicationCategoryType: public.app-category.productivity
+        UISupportsDocumentBrowser: true
+        LSSupportsOpeningDocumentsInPlace: true
+        UILaunchScreen: {}
+        UTImportedTypeDeclarations:
+          - UTTypeIdentifier: com.desi.dsi
+            UTTypeDescription: DESI Database
+            UTTypeConformsTo: [public.database, public.data]
+            UTTypeTagSpecification:
+              public.filename-extension: [dsi]
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: DESI Database
+            CFBundleTypeRole: Editor
+            LSHandlerRank: Default
+            LSItemContentTypes: [com.desi.dsi]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.ajthom90.keystrip
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_ENTITLEMENTS[sdk=macosx*]: App/Keystrip/Keystrip-macOS.entitlements

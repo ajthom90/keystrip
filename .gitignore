@@ -22,3 +22,7 @@ Package.resolved
 *.dsi
 !KeystripCore/Tests/KeystripCoreTests/Fixtures/*.dsi
 DESI Labeling System/
+
+# Local signing overrides
+Config/Local.xcconfig
+
