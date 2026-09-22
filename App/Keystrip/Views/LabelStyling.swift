@@ -1,5 +1,11 @@
+import CoreGraphics
 import KeystripCore
 import SwiftUI
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
 /// Font, colour, and alignment conversions from a DESI label to SwiftUI.
 enum LabelStyling {
@@ -23,6 +29,33 @@ enum LabelStyling {
             green: Double(rgb.green) / 255,
             blue: Double(rgb.blue) / 255
         )
+    }
+
+    /// Gamma-encoded sRGB bytes, rounded and clamped to 0...255.
+    static func rgbColor(from color: Color) -> KeystripCore.RGBColor {
+        let red: CGFloat
+        let green: CGFloat
+        let blue: CGFloat
+        #if os(macOS)
+        guard let converted = NSColor(color).usingColorSpace(.sRGB) else { return .black }
+        red = converted.redComponent
+        green = converted.greenComponent
+        blue = converted.blueComponent
+        #else
+        var r: CGFloat = 0
+        var g: CGFloat = 0
+        var b: CGFloat = 0
+        var alpha: CGFloat = 0
+        guard UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &alpha) else { return .black }
+        red = r
+        green = g
+        blue = b
+        #endif
+        return KeystripCore.RGBColor(red: roundedByte(red), green: roundedByte(green), blue: roundedByte(blue))
+    }
+
+    private static func roundedByte(_ component: CGFloat) -> Int {
+        Int((Double(component) * 255).rounded())
     }
 
     /// Label colour adjusted so near-black DESI ink stays readable on a dark strip.

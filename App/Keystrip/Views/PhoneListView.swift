@@ -1,12 +1,14 @@
 import KeystripCore
 import SwiftUI
 
-/// Sidebar list of phones, with search and sort.
+/// Sidebar list of phones, with search, sort, and phone actions.
 struct PhoneListView: View {
     var document: KeystripDocument
-
-    @State private var searchText = ""
-    @State private var sortOrder: PhoneSortOrder = .id
+    @Binding var searchText: String
+    @Binding var sortOrder: PhoneSortOrder
+    var onNewPhone: @MainActor () -> Void
+    var onDuplicate: @MainActor (Phone) -> Void
+    var onDelete: @MainActor (Phone) -> Void
 
     var body: some View {
         Group {
@@ -21,13 +23,26 @@ struct PhoneListView: View {
             } else {
                 List(displayedPhones, selection: selection) { phone in
                     row(for: phone)
+                        .contextMenu {
+                            Button("Duplicate") { onDuplicate(phone) }
+                            Button("Delete", role: .destructive) { onDelete(phone) }
+                        }
                 }
                 .listStyle(.sidebar)
+                #if os(macOS)
+                .onDeleteCommand(perform: deleteSelection)
+                #endif
             }
         }
         .navigationTitle("Phones")
         .searchable(text: $searchText, prompt: "Search phones")
         .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button(action: onNewPhone) {
+                    Label("New Phone", systemImage: "plus")
+                }
+                .help("New Phone")
+            }
             ToolbarItem(placement: .automatic) {
                 Menu {
                     Picker("Sort Order", selection: $sortOrder) {
@@ -56,6 +71,16 @@ struct PhoneListView: View {
             set: { document.select($0) }
         )
     }
+
+    #if os(macOS)
+    /// Delete key while a visible sidebar row is selected. Nil leaves the command disabled.
+    private var deleteSelection: (() -> Void)? {
+        guard let id = document.data.selectedPhoneID,
+              let phone = displayedPhones.first(where: { $0.id == id })
+        else { return nil }
+        return { onDelete(phone) }
+    }
+    #endif
 
     private func row(for phone: Phone) -> some View {
         VStack(alignment: .leading, spacing: 2) {

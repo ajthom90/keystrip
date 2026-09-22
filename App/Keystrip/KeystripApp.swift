@@ -6,5 +6,6 @@ struct KeystripApp: App {
         DocumentGroup(newDocument: { KeystripDocument() }) { file in
             ContentView(document: file.document)
         }
+        .commands { EditorCommands() }
     }
 }
