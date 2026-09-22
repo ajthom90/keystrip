@@ -1,7 +1,19 @@
 import KeystripCore
 import SwiftUI
 
-/// Paper strip: name strip on top, then one finger-shaped key cell per key.
+/// How the paper strip is drawn. Derived from typecode in one place.
+enum StripStyle: Equatable {
+    /// AWX9224: staggered finger cells, markers beside the rounded ends.
+    case fingers
+    /// AWX9212 and unknown models: ruled rectangular rows, markers on the right, clip tabs.
+    case ruled
+
+    static func forTypecode(_ typecode: String) -> StripStyle {
+        typecode == "AWX9224" ? .fingers : .ruled
+    }
+}
+
+/// Paper strip: name strip on top, then one key cell per key in the model's style.
 struct StripView: View {
     var document: KeystripDocument
     var phone: Phone
@@ -11,36 +23,87 @@ struct StripView: View {
 
     private let stripWidth: CGFloat = 220
     private let markerWidth: CGFloat = 22
-    private let stripSpacing: CGFloat = 3
+    private let fingerSpacing: CGFloat = 3
     private let nameStripGap: CGFloat = 6
+    private let clipTabHeight: CGFloat = 12
+    private let ruleHeight: CGFloat = 1
+
+    private var stripStyle: StripStyle { .forTypecode(phone.typecode) }
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            markerColumn(odd: true)
-            paper
-            markerColumn(odd: false)
+            switch stripStyle {
+            case .fingers:
+                markerColumn(.odd)
+                paper
+                markerColumn(.even)
+            case .ruled:
+                Color.clear.frame(width: markerWidth)
+                paper
+                markerColumn(.all)
+            }
         }
         .accessibilityElement(children: .contain)
     }
 
     private var paper: some View {
-        VStack(spacing: stripSpacing) {
+        VStack(spacing: 0) {
+            if stripStyle == .ruled {
+                ClipTab(pointingUp: true)
+                    .fill(clipTabColor)
+                    .frame(width: stripWidth, height: clipTabHeight)
+            }
+            cellStack
+                .padding(.horizontal, 10)
+                .padding(.vertical, 10)
+                .frame(width: stripWidth)
+                .background(LabelStyling.stripBackground(for: colorScheme), in: paperShape)
+                .overlay(paperShape.stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
+                .shadow(color: .black.opacity(colorScheme == .dark ? 0.45 : 0.18), radius: 8, y: 3)
+            if stripStyle == .ruled {
+                ClipTab(pointingUp: false)
+                    .fill(clipTabColor)
+                    .frame(width: stripWidth, height: clipTabHeight)
+            }
+        }
+    }
+
+    private var cellStack: some View {
+        VStack(spacing: rowSpacing) {
             cell(kind: .nameStrip)
-                .padding(.bottom, nameStripGap - stripSpacing)
+                .padding(.bottom, nameExtraGap)
             ForEach(keyNumbers, id: \.self) { number in
+                if stripStyle == .ruled {
+                    Rectangle()
+                        .fill(ruleColor)
+                        .frame(height: ruleHeight)
+                }
                 cell(kind: .key(number))
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 10)
-        .frame(width: stripWidth)
-        .background(LabelStyling.stripBackground(for: colorScheme), in: paperShape)
-        .overlay(paperShape.stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
-        .shadow(color: .black.opacity(colorScheme == .dark ? 0.45 : 0.18), radius: 8, y: 3)
     }
 
     private var paperShape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
+        RoundedRectangle(cornerRadius: stripStyle == .fingers ? 10 : 2, style: .continuous)
+    }
+
+    private var rowSpacing: CGFloat {
+        stripStyle == .fingers ? fingerSpacing : 0
+    }
+
+    private var nameExtraGap: CGFloat {
+        stripStyle == .fingers ? nameStripGap - fingerSpacing : 0
+    }
+
+    private var clipTabColor: Color {
+        switch colorScheme {
+        case .dark: Color(white: 0.45)
+        default: Color(white: 0.62)
+        }
+    }
+
+    private var ruleColor: Color {
+        Color.primary.opacity(colorScheme == .dark ? 0.35 : 0.22)
     }
 
     private func cell(kind: KeyCellView.Kind) -> KeyCellView {
@@ -60,25 +123,50 @@ struct StripView: View {
             kind: kind,
             label: label,
             rowHeight: rowHeight,
+            stripStyle: stripStyle,
             focusedFieldID: focusedFieldID,
             onMoveFocus: { delta in moveFocus(from: fieldID, delta: delta) }
         )
     }
 
-    private func markerColumn(odd: Bool) -> some View {
-        VStack(spacing: stripSpacing) {
-            Color.clear
-                .frame(width: markerWidth, height: rowHeight)
-                .padding(.bottom, nameStripGap - stripSpacing)
-            ForEach(keyNumbers, id: \.self) { number in
-                Group {
-                    if (number.isMultiple(of: 2) == false) == odd {
-                        keyCapMarker(number)
-                    } else {
-                        Color.clear
+    private enum MarkerFilter {
+        case odd, even, all
+
+        func includes(_ number: Int) -> Bool {
+            switch self {
+            case .odd: !number.isMultiple(of: 2)
+            case .even: number.isMultiple(of: 2)
+            case .all: true
+            }
+        }
+    }
+
+    private func markerColumn(_ filter: MarkerFilter) -> some View {
+        VStack(spacing: 0) {
+            if stripStyle == .ruled {
+                Color.clear.frame(width: markerWidth, height: clipTabHeight)
+            }
+            VStack(spacing: rowSpacing) {
+                Color.clear
+                    .frame(width: markerWidth, height: rowHeight)
+                    .padding(.bottom, nameExtraGap)
+                ForEach(keyNumbers, id: \.self) { number in
+                    if stripStyle == .ruled {
+                        Color.clear.frame(height: ruleHeight)
                     }
+                    Group {
+                        if filter.includes(number) {
+                            keyCapMarker(number)
+                        } else {
+                            Color.clear
+                        }
+                    }
+                    .frame(width: markerWidth, height: rowHeight)
                 }
-                .frame(width: markerWidth, height: rowHeight)
+            }
+            .padding(.vertical, 10)
+            if stripStyle == .ruled {
+                Color.clear.frame(width: markerWidth, height: clipTabHeight)
             }
         }
         .accessibilityHidden(true)
@@ -127,5 +215,28 @@ struct StripView: View {
         } else if let last = order.last {
             focusedFieldID.wrappedValue = last
         }
+    }
+}
+
+/// Short trapezoid that meets the paper at full width and tapers away from it.
+private struct ClipTab: Shape {
+    var pointingUp: Bool
+
+    func path(in rect: CGRect) -> Path {
+        let inset = min(rect.width * 0.16, 28)
+        var path = Path()
+        if pointingUp {
+            path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+            path.addLine(to: CGPoint(x: rect.minX + inset, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX - inset, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        } else {
+            path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.minX + inset, y: rect.maxY))
+            path.addLine(to: CGPoint(x: rect.maxX - inset, y: rect.maxY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        }
+        path.closeSubpath()
+        return path
     }
 }

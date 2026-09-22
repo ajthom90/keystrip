@@ -13,6 +13,7 @@ struct KeyCellView: View {
     var kind: Kind
     var label: PhoneLabel?
     var rowHeight: CGFloat
+    var stripStyle: StripStyle
     var focusedFieldID: FocusState<Int?>.Binding
     var onMoveFocus: (Int) -> Void
 
@@ -71,13 +72,18 @@ struct KeyCellView: View {
 
     @ViewBuilder
     private var outlineStroke: some View {
-        switch kind {
-        case .nameStrip:
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(outlineColor, lineWidth: 1.25)
-        case .key(let number):
-            FingerShape(roundedOnLeading: number.isMultiple(of: 2) == false)
-                .stroke(outlineColor, lineWidth: 1.25)
+        switch stripStyle {
+        case .ruled:
+            EmptyView()
+        case .fingers:
+            switch kind {
+            case .nameStrip:
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(outlineColor, lineWidth: 1.25)
+            case .key(let number):
+                FingerShape(roundedOnLeading: number.isMultiple(of: 2) == false)
+                    .stroke(outlineColor, lineWidth: 1.25)
+            }
         }
     }
 
@@ -108,9 +114,9 @@ struct KeyCellView: View {
     }
 
     private var horizontalPadding: CGFloat {
-        switch kind {
-        case .nameStrip: 10
-        case .key: 14
+        switch (stripStyle, kind) {
+        case (.fingers, .key): 14
+        default: 10
         }
     }
 
