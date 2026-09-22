@@ -440,12 +440,16 @@ from the file's UTF-16le encoding.
   text) changes nothing and does not stamp `modified`.
 - Blank labels: clearing the text of a label that exists in the file keeps
   the row as an empty label with its style, like DESI's own `...\qc\b }` rows.
-  Clearing a label created in this session removes it. Typing into a blank
+  Clearing a label with no original bytes (typed from scratch in this
+  session) removes it; a label copied from another phone carries that
+  phone's bytes, so clearing it keeps an empty row, which DESI also uses. Typing into a blank
   key creates a label from `LabelText.template(forFieldID:)`.
 - Undo: the document's `@MainActor` wrapper for each edit captures `phones`
   before the change, applies the core method, and registers an undo with the
   view's `UndoManager` that restores the captured array (and registers the
-  matching redo). Registering undo is also what marks the document dirty.
+  matching redo). The restored state includes the selection as it was when
+  the edit was made, so undo shows the user what changed. Registering undo is
+  also what marks the document dirty.
   Selection changes are not undoable and don't dirty the document; the current
   selection is written to `selections` on the next real save.
 
@@ -502,7 +506,7 @@ from the file's UTF-16le encoding.
 | Delete Phone | none (⌫ in the sidebar on macOS), so it can't fire while typing |
 | Bold / Italic / Underline | ⌘B / ⌘I / ⌘U |
 | Bigger / Smaller | ⌘+ / ⌘− |
-| Align Left / Center / Right | ⇧⌘{ / ⇧⌘\| / ⇧⌘} |
+| Align Left / Center / Right | ⌘{ / ⌘\| / ⌘} (typed with Shift on a US keyboard) |
 | Toggle Inspector | ⌥⌘I |
 
 Standard File and Edit menus (New, Open, Save, Duplicate, Rename, Revert,
