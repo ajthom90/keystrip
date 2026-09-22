@@ -159,18 +159,21 @@ keystrip/
   KeystripCore/
     Package.swift
     Sources/KeystripCore/
-      Model/        Phone, Label, LabelText, Run, PhoneModel, PhoneCatalog, DSIDocumentData
+      Model/        Phone, PhoneLabel, LabelText, TextRun, TextStyle, PhoneModel, PhoneCatalog,
+                    DSIDocumentData, DocumentEditing, PhoneSorting, DESITimestamp
       RTF/          RTFTokenizer, RTFParser, RTFWriter, Windows1252
       DSI/          SQLiteDatabase (thin C-API wrapper), DSIReader, DSIWriter, DSISchema
+      Editing/      DocumentEditing, PhoneSorting
+    Sources/keystrip-check/   command-line round-trip checker for real files (never committed)
     Tests/KeystripCoreTests/
       Fixtures/sample.dsi
       ...
   App/
     Keystrip/       SwiftUI sources, Info.plist entries, entitlements, assets
   project.yml       XcodeGen definition (generates Keystrip.xcodeproj, which is gitignored)
+  Config/Signing.xcconfig   ad-hoc signing default, optional gitignored Local.xcconfig
   Scripts/
-    make-fixture.sh         builds Tests/.../Fixtures/sample.dsi from SQL with the sqlite3 CLI
-    check-real-file.swift   round-trip check against a real .dsi that is never committed
+    fixture.sql, make-fixture.sh   build Tests/.../Fixtures/sample.dsi with the sqlite3 CLI
     ci.sh                   the exact commands CI runs
   .github/workflows/ci.yml
   docs/superpowers/specs/, docs/superpowers/plans/
@@ -186,15 +189,22 @@ proprietary DESI Windows program is never committed.
 - Deployment targets: macOS 15.0, iOS 18.0 (iPhone and iPad). Code must also
   compile with the Xcode 26 SDK because GitHub's runners may lag; anything
   newer is gated with `#available`.
-- XcodeGen 2.44 or later, `supportedDestinations: [macOS, iOS, iPad]` on one
-  application target. The generated project is not committed; `xcodegen
+- XcodeGen 2.44 or later: one application target with `platform: auto` and
+  `supportedDestinations: [iOS, macOS]`, `TARGETED_DEVICE_FAMILY` `1,2`. The generated project is not committed; `xcodegen
   generate` recreates it.
-- Code signing is automatic with no team set in the project, so contributors
-  build locally with their own account. CI builds with `CODE_SIGNING_ALLOWED=NO`.
+- Code signing comes from `Config/Signing.xcconfig`: ad-hoc (`CODE_SIGN_IDENTITY = -`,
+  manual style, no team) so anyone can build and run on a Mac or simulator, with
+  `#include? "Local.xcconfig"` so a contributor can set `DEVELOPMENT_TEAM` for
+  device builds in a gitignored file. CI builds with `CODE_SIGNING_ALLOWED=NO`.
+- The macOS build is sandboxed with `com.apple.security.files.user-selected.read-write`
+  (entitlements applied only for `sdk=macosx*`).
 
 ## 4. KeystripCore
 
 ### 4.1 Model
+
+Type names avoid SwiftUI's (`Label`, `TextAlignment`), because the app imports
+both modules.
 
 ```swift
 public struct DSIDocumentData: Equatable, Sendable {
@@ -208,40 +218,53 @@ public struct Phone: Identifiable, Equatable, Sendable {
     public var typecode: String              // extension.typecode
     public var name: String
     public var modified: String              // DESI timestamp string, see DESITimestamp
-    public var fields: [Int: Label]          // every row in `field`, including unknown ids
+    public var fields: [Int: PhoneLabel]     // every row in `field`, including unknown ids
 }
 
-public struct Label: Equatable, Sendable {
+public struct PhoneLabel: Equatable, Sendable {
     public var text: LabelText
-    public var originalRTF: String?          // bytes as read from the file; nil for a new label
-    public var isEdited: Bool { get }        // computed: false when originalRTF != nil and text == parse(originalRTF)
+    public let originalRTF: String?          // content as read from the file; nil for a new label
+    public let originalText: LabelText?      // parse of originalRTF at load time
+    public let isUnreadable: Bool            // originalRTF failed to parse
+    public var isEdited: Bool { get }        // originalRTF == nil || text != originalText
+    public var rtfForWriting: String { get } // originalRTF when !isEdited, else RTFWriter.write(text)
+}
+
+public struct TextStyle: Equatable, Hashable, Sendable {
+    public var bold = false, italic = false, underline = false
+}
+
+public struct TextRun: Equatable, Sendable {
+    public var text: String
+    public var style: TextStyle
+}
+
+public enum LabelAlignment: String, CaseIterable, Sendable {
+    case left = "l", center = "c", right = "r", justified = "j"
 }
 
 public struct LabelText: Equatable, Sendable {
     public var fontFace: String = "Arial"
     public var fontSize: Int = 18            // half-points
     public var color: RGBColor = .black
-    public var alignment: TextAlignment = .center   // .left, .center, .right, .justified
-    public var paragraphs: [[Run]] = [[]]    // never empty; a blank label is [[]]
+    public var alignment: LabelAlignment = .center
+    public var baseStyle: TextStyle = TextStyle()   // style written in the header, see 4.2
+    public var paragraphs: [[TextRun]] = [[]]        // never empty; a blank label is [[]]
 }
 
-public struct Run: Equatable, Sendable {
-    public var text: String
-    public var bold = false, italic = false, underline = false
-}
-
-public struct PhoneModel: Sendable {
+public struct PhoneModel: Equatable, Hashable, Sendable, Identifiable {
     public let typecode: String              // "AWX9212"
     public let displayName: String           // "Allworx 9212"
     public let keyCount: Int                 // 12
     public static let nameStripFieldID = 4796
-    public func fieldID(forKey k: Int) -> Int   // 5096 + 1000 * (k - 1)
-    public func keyIndex(forFieldID id: Int) -> Int?
+    public static func fieldID(forKey k: Int) -> Int      // 5096 + 1000 * (k - 1)
+    public static func keyIndex(forFieldID id: Int) -> Int?
 }
 
 public enum PhoneCatalog {
     public static let known: [PhoneModel]    // AWX9212, AWX9224
     public static func model(for typecode: String) -> PhoneModel?
+    public static func keyCount(for phone: Phone) -> Int  // model's count, else inferred from fields
 }
 
 public enum DESITimestamp {
@@ -249,16 +272,27 @@ public enum DESITimestamp {
 }
 ```
 
-`LabelText` has two convenience conversions used by the editor:
+`baseStyle` exists because an empty label still carries a style
+(`...\qc\b }` is an empty bold label), and a blank label has no runs to hold
+it. The parser sets it to the style in effect at the first text character, or
+at the end of the body when there is no text.
+
+`LabelText` conveniences used by the editor:
 
 - `plainText: String` joins run texts within a paragraph and paragraphs with
   `\n`.
-- `fieldStyle: FieldStyle` (bold, italic, underline) is the style of the
-  first non-empty run, or all false.
-- `replacingText(_ s: String)` splits on `\n` and rebuilds every paragraph as
-  one run carrying `fieldStyle`, keeping fontFace, fontSize, color, and
-  alignment. `hasMixedRuns` reports whether any paragraph has runs with
-  differing styles, so the UI can warn before the text is simplified.
+- `hasMixedRuns: Bool` is true when any run's style differs from `baseStyle`.
+- `replacingText(_ s: String) -> LabelText` splits on `\n` and rebuilds every
+  paragraph as one run carrying `baseStyle`, keeping fontFace, fontSize, color,
+  and alignment.
+- `format: LabelFormat` (get and set) exposes fontSize, color, alignment, and
+  style together; setting it applies the style to `baseStyle` and every run.
+- `LabelText.template(forFieldID:)` is the default for a new label: Arial,
+  9 pt, black, centred, bold for keys and not bold for the name strip,
+  matching the real files.
+
+Editing operations live in KeystripCore as `mutating` methods on
+`DSIDocumentData` so they are unit-tested without the app (section 5.1).
 
 ### 4.2 RTF codec
 
@@ -284,11 +318,14 @@ symbols (`\'hh`, `\\`, `\{`, `\}`, `\~`, `\-`, `\_`, `\*`), and text runs.
 `RTFWriter.write(_ text: LabelText) -> String` emits the DESI template from
 section 2.4:
 
-- Field-level style is the style of the first run of the first paragraph
-  (`\b`, `\i`, `\ul` in that order). Subsequent style changes are emitted
-  inline as `\b`/`\b0`, `\i`/`\i0`, `\ul`/`\ulnone`, each followed by a
-  space delimiter. If the text that follows a control word begins with a
-  space, the writer emits two spaces so the delimiter doesn't eat it.
+- The header style is `baseStyle` (`\b`, `\i`, `\ul` in that order). A run
+  whose style differs from the current style is preceded by inline changes
+  `\b`/`\b0`, `\i`/`\i0`, `\ul`/`\ulnone`.
+- Every control word the writer emits is followed by one space delimiter,
+  including the last header word and `\par`, exactly as DESI does. Text that
+  itself starts with a space therefore comes out as two spaces, which parses
+  back correctly. The exception is `\uN?`, where the `?` fallback ends the
+  word.
 - Paragraphs are joined with `\par `.
 - Text escaping: `\` `{` `}` are escaped; characters below 0x80 (except control
   characters) are literal; characters in Windows-1252 are `\'hh`; anything
@@ -296,7 +333,7 @@ section 2.4:
   above the BMP.
 
 Codec invariant, enforced by tests over every field in the fixture and by
-`Scripts/check-real-file.swift` over real files: for every field DESI wrote,
+`keystrip-check` over real files: for every field DESI wrote,
 `RTFWriter.write(try RTFParser.parse(x)) == x`.
 
 ### 4.3 Reading
@@ -305,33 +342,41 @@ Codec invariant, enforced by tests over every field in the fixture and by
 an in-memory SQLite connection with `sqlite3_deserialize`, checks
 `meta.kind == "dsi"` (else `DSIError.notADESIDatabase`), reads `extension`
 ordered by rowid, all `field` rows, and `selections`. Each field's content is
-parsed; if parsing throws, the label is kept with `text` empty, `originalRTF`
-set, and `isEdited == false`, so it is written back untouched and the UI shows
-it as unreadable rather than losing it.
+parsed; if parsing throws, the label is kept with `isUnreadable == true`,
+`text` and `originalText` both empty, and `originalRTF` set, so `isEdited` is
+false and it is written back untouched. The UI shows it as read-only
+"unreadable label, kept as is" rather than losing it. Non-SQLite data, an
+empty file, or a database without `meta.kind = 'dsi'` throws
+`DSIError.notADESIDatabase`.
 
 ### 4.4 Writing
 
 `DSIWriter.write(_ current: DSIDocumentData, previous: DSIDocumentData, original: Data) throws -> Data`
 deserializes `original`, applies the difference between `previous` and
 `current` inside one transaction, and returns `sqlite3_serialize` bytes.
-`original` and `previous` are the bytes and model from the last load or save,
-so untouched rows, `meta`, `graphics`, and any unknown tables survive byte for
-byte.
+`original` and `previous` are the bytes and the model from when the document
+was opened. They never change while it is open: every save applies all edits
+since opening to the original bytes, which is correct no matter how many
+saves happen and needs no state updated from the save thread. Untouched rows,
+`meta`, `graphics`, and any unknown tables survive byte for byte.
 
 Rules, in order:
 
-1. Phones in `previous` but not in `current` (by id): `DELETE FROM field`,
-   `DELETE FROM selections`, `DELETE FROM extension` for that id.
-2. Phones in `current` but not in `previous`: `INSERT INTO extension`, then
-   `INSERT OR REPLACE INTO field` for every field, using `originalRTF` when
-   `isEdited` is false and it is present, otherwise `RTFWriter.write(text)`.
-   A phone whose id was renamed is a delete of the old id plus an insert of
-   the new one (this carries unknown fields along explicitly).
-3. Phones in both: `UPDATE extension SET typecode=?, name=?, modified=?` when
-   any of those changed; fields present in `previous` but not `current` are
-   deleted; fields whose `isEdited` is true or which are new are written with
-   `INSERT OR REPLACE`. Fields with `isEdited == false` are not touched.
-4. If `selectedPhoneID` differs from `previous` and is non-nil and refers to a
+1. If `current` has two phones with the same id, throw
+   `DSIError.duplicatePhoneID` before writing anything.
+2. Phones in `previous` but not in `current` (by id): `DELETE FROM field`,
+   `DELETE FROM selections`, `DELETE FROM extension` for that id. A phone whose
+   id was renamed is a delete of the old id plus an insert of the new one,
+   which carries unknown fields along explicitly.
+3. Phones in `current` but not in `previous`: `INSERT INTO extension`, then
+   `INSERT OR REPLACE INTO field` with `rtfForWriting` for every field.
+4. Phones in both: `UPDATE extension SET typecode=?, name=?, modified=? WHERE id=?`
+   when any of those changed. For each field id in either version: absent in
+   `current` means `DELETE`; different from `previous` (by value) means
+   `INSERT OR REPLACE` with `rtfForWriting`; equal means untouched. A label
+   edited and then changed back compares equal to its original text, so
+   `rtfForWriting` returns the original bytes.
+5. If `selectedPhoneID` differs from `previous` and is non-nil and refers to a
    phone in `current`: `DELETE FROM selections` then `INSERT INTO selections`.
 
 The connection runs with `PRAGMA foreign_keys=ON` as a safety net; the rules
@@ -339,7 +384,9 @@ above never depend on it.
 
 `DSIWriter.emptyDatabase() throws -> Data` creates a new file: `PRAGMA
 encoding='UTF-16le'`, `PRAGMA page_size=1024`, the schema in section 2.2
-verbatim, `meta` rows `kind=dsi` and `versions=300, 301, 302, 303`. The
+verbatim in the same order as a DESI file's `sqlite_master` (meta, extension,
+field, selections, graphics, then the `field__field_id` and
+`extension__typecode` indexes), `meta` rows `kind=dsi` and `versions=300, 301, 302, 303`. The
 `versions` value matches what the current DESI app produces after migrating a
 new file, and is confirmed on Windows as part of the compatibility checklist.
 
@@ -357,27 +404,45 @@ from the file's UTF-16le encoding.
 
 ### 5.1 Document
 
-- `DocumentGroup` over `KeystripDocument: ReferenceFileDocument`, an
-  `@Observable` final class. The readable and writable content type is an
-  imported UTType `com.desi.dsi` (`UTImportedTypeDeclarations`, conforms to
-  `public.database`, extension `dsi`, description "DESI Database"). The app
-  is the default handler on macOS; iOS declares
-  `LSSupportsOpeningDocumentsInPlace` and `UISupportsDocumentBrowser`.
-- State: `phones: [Phone]`, `selectedPhoneID: String?`, `meta`, plus private
-  `originalData: Data` and `baseline: DSIDocumentData`. `snapshot` returns a
-  `DSIDocumentData` value. `fileWrapper(snapshot:configuration:)` calls
-  `DSIWriter.write(snapshot, previous: baseline, original: originalData)`, then
-  updates `originalData` and `baseline` to the written result. A new document
-  starts from `DSIWriter.emptyDatabase()`.
-- Every mutation goes through a document method that registers an inverse
-  with the `UndoManager` the view passes in, and stamps `modified` with
-  `DESITimestamp.now()` on the affected phone: `addPhone(id:name:typecode:copyingLabelsFrom:)`,
-  `deletePhone(id:)`, `duplicatePhone(id:newID:)`, `renamePhone(id:to:)`,
-  `setName`, `setTypecode`, `setLabelText(phoneID:fieldID:text:)`,
-  `setLabelStyle(phoneID:fieldID:change:)`. Setting a label's text to empty
-  removes the field row (matching how DESI stores blanks) unless the row
-  existed in the file, in which case it is written as an empty DESI label to
-  keep the change visible to DESI as an edit.
+- `DocumentGroup` over `KeystripDocument: ReferenceFileDocument`. The readable
+  and writable content type is an imported UTType `com.desi.dsi`
+  (`UTImportedTypeDeclarations`, conforms to `public.database` and
+  `public.data`, extension `dsi`, description "DESI Database"), declared as an
+  Editor document type. iOS also declares `LSSupportsOpeningDocumentsInPlace`
+  and `UISupportsDocumentBrowser`.
+- Concurrency (verified with Xcode 27 in Swift 6 mode): `ReferenceFileDocument`
+  is `Sendable` with nonisolated requirements, and a `@MainActor @Observable`
+  class cannot satisfy them. The document is therefore
+  `@Observable final class KeystripDocument: ReferenceFileDocument, @unchecked Sendable`.
+  Its observable `data: DSIDocumentData` is read by views and mutated only by
+  `@MainActor` methods. Each mutation also stores a copy in a
+  `Mutex<DSIDocumentData>` (Synchronization framework), and the nonisolated
+  `snapshot(contentType:)` reads that copy, so saving is safe from any thread.
+  `original: Data` and `baseline: DSIDocumentData` are `let` constants set at
+  open. `fileWrapper(snapshot:configuration:)` is a pure function of the
+  snapshot: `DSIWriter.write(snapshot.current, previous: snapshot.baseline, original: snapshot.original)`.
+  A new document starts from `DSIWriter.emptyDatabase()`.
+- Editing logic lives in KeystripCore as `mutating` methods on
+  `DSIDocumentData`, each taking `now: String = DESITimestamp.now()` and
+  stamping `modified` on the affected phone:
+  `addPhone(id:name:typecode:copyingFrom:includeNameStrip:now:)`,
+  `deletePhone(id:)`, `renamePhone(id:to:now:)`, `setName(_:phoneID:now:)`,
+  `setTypecode(_:phoneID:now:)`, `setLabelText(_:phoneID:fieldID:now:)`,
+  `updateLabelFormat(phoneID:fieldID:now:_:)`. They throw `EditError`
+  (`emptyPhoneID`, `duplicatePhoneID`, `noSuchPhone`). Copying from a phone
+  copies each label's `rtfForWriting` byte for byte; New Phone "start from a
+  template" skips the name strip and Duplicate includes it. A no-op edit (same
+  text) changes nothing and does not stamp `modified`.
+- Blank labels: clearing the text of a label that exists in the file keeps
+  the row as an empty label with its style, like DESI's own `...\qc\b }` rows.
+  Clearing a label created in this session removes it. Typing into a blank
+  key creates a label from `LabelText.template(forFieldID:)`.
+- Undo: the document's `@MainActor` wrapper for each edit captures `phones`
+  before the change, applies the core method, and registers an undo with the
+  view's `UndoManager` that restores the captured array (and registers the
+  matching redo). Registering undo is also what marks the document dirty.
+  Selection changes are not undoable and don't dirty the document; the current
+  selection is written to `selections` on the next real save.
 
 ### 5.2 Views
 
@@ -390,7 +455,9 @@ from the file's UTF-16le encoding.
 - Detail `PhoneEditorView` for the selected phone, or a
   `ContentUnavailableView` inviting the user to pick or create one. The
   editor shows a header (id, name, model) and a `StripView` centred in a
-  scroll view.
+  scroll view. For an unknown typecode the key count is inferred from the
+  highest key field present. A footnote lists how many other fields (comment
+  fields, keys beyond the current model) are preserved but not shown.
 - `StripView` draws the strip to proportion: a fixed strip width, equal row
   heights, the name strip as a full-width rounded cell on top, then one
   `KeyCellView` per key. Each key cell is a rounded "finger" shape whose open
@@ -427,7 +494,7 @@ from the file's UTF-16le encoding.
 |---|---|
 | New Phone | ⇧⌘N |
 | Duplicate Phone | ⌘D |
-| Delete Phone | ⌘⌫ |
+| Delete Phone | none (⌫ in the sidebar on macOS), so it can't fire while typing |
 | Bold / Italic / Underline | ⌘B / ⌘I / ⌘U |
 | Bigger / Smaller | ⌘+ / ⌘− |
 | Align Left / Center / Right | ⇧⌘{ / ⇧⌘\| / ⇧⌘} |
@@ -448,11 +515,12 @@ the inspector and the new-phone sheet.
 `KeystripCoreTests` (Swift Testing), run with
 `swift test --package-path KeystripCore`:
 
-- RTF: every field in the fixture round-trips byte-identically; parsing of
-  escapes (`\'e9`, `荤?`, `\{`, `\\`), mixed inline runs, empty labels,
+- RTF: every field in the fixture round-trips byte-identically, including
+  empty labels (`\qc\b }` and `\qc }`); parsing of
+  escapes (`\'e9`, `\u256?` (Ā), `\u-10179?\u-8704?`, `\{`, `\\`), mixed inline runs, empty labels,
   trailing `\par `, `\ftnil`, an empty colortbl entry, unknown control words,
   and `\*` groups; writing of non-ASCII and leading-space-after-control-word
-  cases; `plainText`, `fieldStyle`, and `replacingText`.
+  cases; `plainText`, `hasMixedRuns`, `replacingText`, `format`, and `template`.
 - Reader: the fixture loads the expected phones, fields, meta, and selection;
   unknown typecodes load; a non-SQLite blob and an SQLite file without
   `kind=dsi` throw the right errors.
@@ -464,7 +532,10 @@ the inspector and the new-phone sheet.
   (a deliberately odd fixture field) is still written back unchanged.
   `emptyDatabase()` produces `sqlite_master` SQL identical to section 2.2 and
   the expected meta rows.
-- Catalog: field id mapping both directions.
+- Catalog: field id mapping both directions; key count inference.
+- Editing: every `DSIDocumentData` mutation, its validation errors, `modified`
+  stamping, no-op detection, blank-label rules, copy-from byte identity, and
+  sorting and search (`localizedStandardCompare`).
 
 Fixture: `Scripts/make-fixture.sh` builds `sample.dsi` with the `sqlite3` CLI
 from an SQL script (UTF-16le, page size 1024, DESI schema, `versions`
@@ -475,9 +546,10 @@ an `\fs16` label, a label with `\'e9`, a label with mixed inline runs, a
 label with an odd but valid RTF that the writer would not reproduce, and one
 `selections` row. All names are fictional. The generated file is committed.
 
-`Scripts/check-real-file.swift <file.dsi>` (run locally, never on committed
-data) parses and re-serializes every field in a real file and reports any
-that don't round-trip.
+`swift run --package-path KeystripCore keystrip-check [--show] <file.dsi>`
+(run locally on real files, which are never committed) parses and
+re-serializes every field, checks that a no-op save is byte-identical, and
+reports failures by phone and field id; `--show` adds label contents.
 
 App: CI builds the macOS app and the iOS Simulator app. No UI tests in v1.
 
@@ -494,7 +566,8 @@ with `CODE_SIGNING_ALLOWED=NO`.
 Done by the user on a Windows machine with DESI Labeling System 3.8.x, on a
 copy of a real file:
 
-1. In Keystrip: change a label's text, add a line break, make one bold, add a
+1. In Keystrip: change a label's text, add a line break, make one bold, type
+   a label with an accented letter (é) and one with a euro sign (€), add a
    phone copied from a template, delete a phone, rename a phone, save.
 2. In DESI: open the file, confirm every change appears, open Print Preview
    for an edited phone, save from DESI.
@@ -503,8 +576,12 @@ copy of a real file:
 
 ## 9. Process
 
-The implementation plan derived from this spec is executed by Grok Build
-(`grok-4.7`) one task at a time, with `swift test` and `xcodebuild` as gates
-and a commit per green task. Claude reviews each commit and sends fixes back.
-Before implementation, Grok reviews the spec and plan read-only and its
-critique is folded in.
+The implementation plan derived from this spec is executed by Grok Build one
+task at a time, with `swift test` and `xcodebuild` as gates and a commit per
+green task. Each task is run twice in parallel, by `grok-4.6` and `grok-4.7`
+(both at high reasoning effort) in separate git worktrees on separate
+branches, with token usage and cost recorded per run. Claude reviews both
+results for each task, picks the better one to merge into `main`, sends
+fixes back to that model when needed, and reports which model produced
+better code. Before implementation, Grok reviews the spec and plan read-only
+and its critique is folded in.
