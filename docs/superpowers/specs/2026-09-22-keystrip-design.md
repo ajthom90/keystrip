@@ -34,11 +34,14 @@ SQL and RTF templates embedded in `desi.exe` (DESI Labeling System 3.8.23.0).
 CREATE TABLE meta (key TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL DEFAULT (''));
 CREATE TABLE extension (id TEXT NOT NULL PRIMARY KEY, typecode TEXT NOT NULL, name TEXT NOT NULL DEFAULT (''), modified TEXT NOT NULL);
 CREATE TABLE field (extension_id TEXT NOT NULL REFERENCES extension(id) ON UPDATE CASCADE ON DELETE CASCADE, field_id INTEGER NOT NULL, content TEXT NOT NULL DEFAULT (''), PRIMARY KEY (extension_id, field_id));
-CREATE INDEX field__field_id ON field (field_id);
-CREATE INDEX extension__typecode ON extension (typecode);
 CREATE TABLE selections (extension_id TEXT NOT NULL PRIMARY KEY REFERENCES extension(id) ON UPDATE CASCADE ON DELETE CASCADE);
 CREATE TABLE graphics (hash TEXT NOT NULL PRIMARY KEY,file_size INTEGER NOT NULL, original_name TEXT NOT NULL, content BLOB NOT NULL);
+CREATE INDEX field__field_id ON field (field_id);
+CREATE INDEX extension__typecode ON extension (typecode);
 ```
+
+This is also the order of `sqlite_master` in a real DESI file: the five
+tables, then the two indexes.
 
 The exact `CREATE` text matters: DESI compares nothing against it, but a new
 file Keystrip creates must be indistinguishable from one DESI created, so the
@@ -332,9 +335,11 @@ section 2.4:
   else is `\uN?`, with a surrogate pair written as two `\u` words for scalars
   above the BMP.
 
-Codec invariant, enforced by tests over every field in the fixture and by
-`keystrip-check` over real files: for every field DESI wrote,
-`RTFWriter.write(try RTFParser.parse(x)) == x`.
+Codec invariant, for every field written in DESI's template (section 2.4):
+`RTFWriter.write(try RTFParser.parse(x)) == x`. Tests enforce it over every
+template field in the fixture, and `keystrip-check` over real files. Fields
+in any other form (the fixture has one deliberately) are never rewritten
+unless edited, because unedited labels are saved from their original bytes.
 
 ### 4.3 Reading
 
